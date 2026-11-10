@@ -6,17 +6,31 @@ from bs4 import BeautifulSoup
 import openpyxl
 import re
 from datetime import datetime, timedelta
-import easyocr
+import io
 
 st.set_page_config(page_title="Phân Bổ Nhiên Liệu", layout="wide")
 
-FILE_EXCEL = "DATA.xlsx"
 PETROLIMEX_URL = "https://www.petrolimex.com.vn/ndi/thong-cao-bao-chi.html"
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
                   "AppleWebKit/537.36 (KHTML, like Gecko) "
                   "Chrome/120.0.0.0 Safari/537.36"
 }
+
+# --- GIAO DIỆN THANH BÊN (SIDEBAR) ĐỂ UPLOAD FILE ---
+st.sidebar.header("📁 Quản lý Dữ liệu")
+uploaded_file = st.sidebar.file_uploader("Tải lên file DATA.xlsx mới nhất", type=["xlsx"])
+
+# Xác định nguồn file Excel (ưu tiên file người dùng vừa upload, nếu không có thì dùng file mẫu mặc định)
+if uploaded_file is not None:
+    excel_source = io.BytesIO(uploaded_file.read())
+    st.sidebar.success("✅ Đã sử dụng file Excel bạn vừa tải lên!")
+else:
+    if os.path.exists("DATA.xlsx"):
+        excel_source = "DATA.xlsx"
+        st.sidebar.info("ℹ️ Đang dùng file `DATA.xlsx` sẵn có trên hệ thống.")
+    else:
+        excel_source = None
 
 # --- HÀM CHUẨN HÓA MẶT HÀNG ---
 def standardize_item_name(name):
@@ -31,167 +45,16 @@ def standardize_item_name(name):
             return "DO 05"
     return None
 
-# --- HÀM TỰ ĐỘNG CẬP NHẬT GIÁ TỪ PETROLIMEX ---
-def update_petrolimex_prices():
-    try:
-        sheet_name = "CHI_TIET_GIA_NHIEN_LIEU"
-        last_recorded_date = None
-        
-        if os.path.exists(FILE_EXCEL):
-            wb_check = openpyxl.load_workbook(FILE_EXCEL, data_only=True)
-            if sheet_name in wb_check.sheetnames:
-                ws_check = wb_check[sheet_name]
-                date_col_idx = 3
-                for col in range(1, ws_check.max_column + 1):
-                    if str(ws_check.cell(row=1, column=col).value).strip() == "Ngày":
-                        date_col_idx = col
-                        break
-                for r in range(ws_check.max_row, 0, -1):
-                    val = ws_check.cell(row=r, column=date_col_idx).value
-                    if val is not None and str(val).strip() != "":
-                        if isinstance(val, datetime):
-                            last_recorded_date = val.date()
-                        elif isinstance(val, str):
-                            for fmt in ('%d/%m/%Y', '%Y-%m-%d', '%d.%m.%Y'):
-                                try:
-                                    last_recorded_date = datetime.strptime(val.strip(), fmt).date()
-                                    break
-                                except:
-                                    pass
-                        if last_recorded_date:
-                            break
-
-        response = requests.get(PETROLIMEX_URL, headers=HEADERS, timeout=10)
-        response.raise_for_status()
-        soup = BeautifulSoup(response.text, 'html.parser')
-        
-        articles_to_process = []
-        for a in soup.find_all('a', href=True):
-            href = a['href']
-            title_text = a.get_text(strip=True)
-            if "dieu-chinh-gia-xang-dau" in href or "điều chỉnh giá" in title_text.lower():
-                article_link = urljoin("https://www.petrolimex.com.vn", href)
-                date_match = re.search(r'ngày\s+(\d{1,2}[./]\d{1,2}[./]\d{4})', title_text)
-                if date_match:
-                    raw_date_str = date_match.group(1).replace('/', '.')
-                    try:
-                        article_date = datetime.strptime(raw_date_str, "%d.%m.%Y").date()
-                        actual_effective_date = article_date + timedelta(days=1)
-                        if last_recorded_date and actual_effective_date <= last_recorded_date:
-                            break 
-                    except:
-                        pass
-                if article_link not in [item['link'] for item in articles_to_process]:
-                    articles_to_process.append({"link": article_link, "title": title_text})
-
-        if not articles_to_process:
-            return
-
-        reader = easyocr.Reader(['vi', 'en'], gpu=False)
-        all_new_rows = []
-
-        for art in articles_to_process:
-            res_article = requests.get(art["link"], headers=HEADERS, timeout=10)
-            if res_article.status_code != 200:
-                continue
-            
-            soup_article = BeautifulSoup(res_article.text, 'html.parser')
-            page_title = soup_article.find('title').text if soup_article.find('title') else art["title"]
-            
-            date_match = re.search(r'ngày\s+(\d{1,2}[./]\d{1,2}[./]\d{4})', page_title)
-            adjustment_date = datetime.strptime(date_match.group(1).replace('/', '.'), "%d.%m.%Y") if date_match else datetime.now()
-            adjustment_date = adjustment_date + timedelta(days=1)
-
-            img_url = None
-            for img in soup_article.find_all('img'):
-                src = img.get('src', '')
-                if "files.petrolimex.com.vn" in src and "s256" not in src and any(ext in src for ext in ["jpg", "png", "webp"]):
-                    img_url = urljoin("https://www.petrolimex.com.vn", src)
-                    break
-
-            if not img_url:
-                continue
-
-            img_data = requests.get(img_url, headers=HEADERS, timeout=10).content
-            temp_img_path = "temp_bang_gia.jpg"
-            with open(temp_img_path, 'wb') as f:
-                f.write(img_data)
-
-            ocr_results = reader.readtext(temp_img_path, detail=0)
-            if os.path.exists(temp_img_path):
-                os.remove(temp_img_path)
-
-            raw_rows = []
-            i = 0
-            while i < len(ocr_results) - 3:
-                item_name = ocr_results[i]
-                p1 = ocr_results[i+2]
-                p2 = ocr_results[i+3]
-                if "." in p1 and "." in p2 and any(char.isdigit() for char in p1):
-                    raw_rows.append([item_name, ocr_results[i+1], p1, p2])
-                    i += 4
-                else:
-                    i += 1
-
-            for row in raw_rows:
-                original_name = row[0]
-                try:
-                    price_vung_1 = int(row[2].replace(".", ""))
-                except:
-                    price_vung_1 = 0
-                
-                standard_name = standardize_item_name(original_name)
-                if standard_name:
-                    all_new_rows.append({
-                        "Mặt hàng": standard_name,
-                        "Giá nhiên liệu": price_vung_1,
-                        "Ngày": adjustment_date
-                    })
-
-        if not all_new_rows:
-            return
-
-        df_new = pd.DataFrame(all_new_rows).sort_values(by="Ngày", ascending=True)
-
-        wb = openpyxl.load_workbook(FILE_EXCEL)
-        if sheet_name in wb.sheetnames:
-            ws = wb[sheet_name]
-            last_real_row = 1
-            for r in range(ws.max_row, 0, -1):
-                if any(ws.cell(row=r, column=c).value is not None for c in range(1, ws.max_column + 1)):
-                    last_real_row = r
-                    break
-            start_row = last_real_row + 1
-        else:
-            ws = wb.create_sheet(sheet_name)
-            ws.cell(row=1, column=1, value="Mặt hàng")
-            ws.cell(row=1, column=2, value="Giá nhiên liệu")
-            ws.cell(row=1, column=3, value="Ngày")
-            start_row = 2
-
-        current_row = start_row
-        for _, row_data in df_new.iterrows():
-            ws.cell(row=current_row, column=1, value=row_data["Mặt hàng"])
-            cell_price = ws.cell(row=current_row, column=2, value=row_data["Giá nhiên liệu"])
-            cell_price.number_format = '#,##0'
-            cell_date = ws.cell(row=current_row, column=3, value=row_data["Ngày"])
-            cell_date.number_format = 'DD/MM/YYYY'
-            current_row += 1
-
-        wb.save(FILE_EXCEL)
-    except Exception as e:
-        print(f"Lỗi cào dữ liệu Petrolimex: {e}")
-
-# --- ĐỌC DỮ LIỆU EXCEL TỰ ĐỘNG CHUẨN HÓA CỘT ---
+# --- ĐỌC DỮ LIỆU EXCEL ---
 @st.cache_data(ttl=3600)
-def load_data():
-    if not os.path.exists(FILE_EXCEL):
+def load_data(file_src):
+    if file_src is None:
         return pd.DataFrame(), pd.DataFrame()
     try:
-        df_xe = pd.read_excel(FILE_EXCEL, sheet_name="THONG_TIN_XE")
-        df_gia = pd.read_excel(FILE_EXCEL, sheet_name="CHI_TIET_GIA_NHIEN_LIEU")
+        df_xe = pd.read_excel(file_src, sheet_name="THONG_TIN_XE")
+        df_gia = pd.read_excel(file_src, sheet_name="CHI_TIET_GIA_NHIEN_LIEU")
         
-        # Chuẩn hóa tên cột để tránh mọi lỗi KeyError
+        # Chuẩn hóa tên cột giá nhiên liệu
         df_gia.columns = [str(c).strip() for c in df_gia.columns]
         for col in df_gia.columns:
             if "giá" in col.lower():
@@ -204,11 +67,7 @@ def load_data():
         st.error(f"Lỗi đọc file Excel: {e}")
         return pd.DataFrame(), pd.DataFrame()
 
-# Chạy cập nhật giá khi app khởi chạy
-with st.spinner("Đang đồng bộ và cập nhật giá nhiên liệu từ Petrolimex..."):
-    update_petrolimex_prices()
-
-df_xe, df_gia = load_data()
+df_xe, df_gia = load_data(excel_source)
 
 def parse_date_input(date_str):
     date_str = str(date_str).strip()
@@ -219,11 +78,11 @@ def parse_date_input(date_str):
             pass
     return None
 
-# --- GIAO DIỆN STREAMLIT ---
-st.title("KIỂM TRA LẠI GIÁ NHIÊN LIỆU")
+# --- GIAO DIỆN CHÍNH ---
+st.title("⛽ Hệ Thống Phân Bổ Nhiên Liệu & Cập Nhật Giá Tự Động")
 
 if df_xe.empty:
-    st.warning("⚠️ Không tìm thấy dữ liệu xe trong file `DATA.xlsx`.")
+    st.warning("⚠️ Vui lòng tải lên file `DATA.xlsx` hợp lệ ở thanh bên trái (Sidebar) để bắt đầu sử dụng.")
 else:
     col1, col2, col3 = st.columns(3)
     
