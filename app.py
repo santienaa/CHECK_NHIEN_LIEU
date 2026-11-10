@@ -6,29 +6,21 @@ from bs4 import BeautifulSoup
 import openpyxl
 import re
 from datetime import datetime, timedelta
-import easyocr
 
 st.set_page_config(page_title="Phân Bổ Nhiên Liệu", layout="wide")
 
 FILE_EXCEL = "DATA.xlsx"
-PETROLIMEX_URL = "https://www.petrolimex.com.vn/ndi/thong-cao-bao-chi.html"
-HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                  "AppleWebKit/537.36 (KHTML, like Gecko) "
-                  "Chrome/120.0.0.0 Safari/537.36"
-}
 
 # --- CÁC HÀM XỬ LÝ LOGIC ---
-def standardize_item_name(name):
-    name_lower = name.lower()
-    if "95" in name_lower and ("v" in name_lower or "5" in name_lower or "ei" in name_lower or "e10" in name_lower):
-        if "3" not in name_lower and "mức 3" not in name_lower:
-            return "E10 RON 95-V"
-    if "0,001" in name or "0.001" in name or "001" in name:
-        return "DO 001"
-    if "0,05" in name or "0.05" in name or "05" in name or "điêzen" in name_lower:
-        if "0,001" not in name and "0.001" not in name and "001" not in name:
-            return "DO 05"
+def parse_date_input(date_str):
+    """Hàm hỗ trợ ép kiểu chuỗi gõ tay thành datetime"""
+    date_str = str(date_str).strip()
+    formats = ["%d/%m/%Y", "%d-%m-%Y", "%Y-%m-%d", "%d.%m.%Y"]
+    for fmt in formats:
+        try:
+            return datetime.strptime(date_str, fmt).date()
+        except ValueError:
+            pass
     return None
 
 @st.cache_data(ttl=3600)
@@ -54,15 +46,25 @@ if df_xe.empty:
 else:
     col1, col2, col3 = st.columns(3)
     
+    # Cho phép gõ tay dạng DD/MM/YYYY hoặc chọn lịch
+    default_from = (datetime.now() - timedelta(days=30)).strftime("%d/%m/%Y")
+    default_to = datetime.now().strftime("%d/%m/%Y")
+
     with col1:
-        tu_ngay = st.date_input("Từ ngày", datetime.now() - timedelta(days=30))
+        str_from = st.text_input("Từ ngày (gõ dd/mm/yyyy)", value=default_from, help="Ví dụ: 11/10/2026")
     with col2:
-        den_ngay = st.date_input("Đến ngày", datetime.now())
+        str_to = st.text_input("Đến ngày (gõ dd/mm/yyyy)", value=default_to, help="Ví dụ: 10/11/2026")
     with col3:
         danh_sach_xe = df_xe["BIEN SO XE"].dropna().tolist()
         bien_so = st.selectbox("Chọn Biển Số Xe", danh_sach_xe)
 
-    if bien_so:
+    # Chuyển đổi ngày gõ tay sang kiểu Date
+    tu_ngay = parse_date_input(str_from)
+    den_ngay = parse_date_input(str_to)
+
+    if not tu_ngay or not den_ngay:
+        st.error("⚠️ Vui lòng nhập ngày đúng định dạng **ngày/tháng/năm** (Ví dụ: 11/10/2026)!")
+    elif bien_so:
         matched_xe = df_xe[df_xe["BIEN SO XE"] == bien_so]
         xe = matched_xe.iloc[0]
         dinh_muc = float(xe["DINH MUC NHIEN LIEU (MOI 100 KM)"])
@@ -93,37 +95,36 @@ else:
         m1.metric("Loại Nhiên Liệu", fuel)
         m2.metric("Định Mức (lít/100km)", f"{dinh_muc:,.2f}")
 
-        # Lọc dữ liệu giá theo khoảng thời gian
+        # Lọc dữ liệu giá theo khoảng thời gian (Sử dụng đúng tên cột 'Giá nhiên liệu')
         data_in_range = df_gia[
             (df_gia["Mặt hàng"] == fuel) &
             (df_gia["Ngày"] >= tu_ts) &
             (df_gia["Ngày"] <= den_ts)
-        ][["Ngày", "Giá Vùng 1"]]
+        ][["Ngày", "Giá nhiên liệu"]]
 
         df_b = df_gia[(df_gia["Mặt hàng"] == fuel) & (df_gia["Ngày"] < tu_ts)]
-        data_before = pd.DataFrame(columns=["Ngày", "Giá Vùng 1"])
+        data_before = pd.DataFrame(columns=["Ngày", "Giá nhiên liệu"])
         if not df_b.empty:
             max_d = df_b["Ngày"].max()
-            data_before = df_b[df_b["Ngày"] == max_d][["Ngày", "Giá Vùng 1"]]
+            data_before = df_b[df_b["Ngày"] == max_d][["Ngày", "Giá nhiên liệu"]]
 
         combined = pd.concat([data_before, data_in_range]).drop_duplicates().sort_values("Ngày")
 
-        # Hiển thị bảng chỉnh sửa phân bổ nhiên liệu trực tiếp trên web
+        # Hiển thị bảng tính toán
         st.subheader("Bảng tính toán phân bổ chi tiết")
         
-        # Tạo bảng hiển thị với cột Phân bổ mặc định là 0 hoặc người dùng nhập
         table_data = []
         for _, r in combined.iterrows():
             table_data.append({
                 "Nhiên liệu phân bổ (lít)": 0.0,
                 "Số KM quy đổi": 0.0,
                 "Ngày khớp": r["Ngày"].strftime("%d/%m/%Y"),
-                "Giá nhiên liệu (VNĐ)": r["Giá Vùng 1"]
+                "Giá nhiên liệu (VNĐ)": r["Giá nhiên liệu"]
             })
 
         df_table = pd.DataFrame(table_data)
         
-        # Sử dụng data_editor để người dùng có thể nhập liệu trực tiếp trên web giống như Excel/Treeview
+        # Bảng cho phép chỉnh sửa số lít nhập vào
         edited_df = st.data_editor(df_table, num_rows="fixed", use_container_width=True)
 
         # Tính toán kết quả tổng hợp
