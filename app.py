@@ -220,7 +220,7 @@ def parse_date_input(date_str):
     return None
 
 # --- GIAO DIỆN STREAMLIT ---
-st.title("⛽ Hệ Thống Phân Bổ Nhiên Liệu & Cập Nhật Giá Tự Động")
+st.title("KIỂM TRA LẠI GIÁ NHIÊN LIỆU")
 
 if df_xe.empty:
     st.warning("⚠️ Không tìm thấy dữ liệu xe trong file `DATA.xlsx`.")
