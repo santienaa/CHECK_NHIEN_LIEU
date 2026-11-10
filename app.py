@@ -1,6 +1,7 @@
 import streamlit as st
 import pandas as pd
 import os
+import openpyxl  # <-- Đã bổ sung khai báo thư viện openpyxl
 from datetime import datetime, timedelta
 import io
 
@@ -11,14 +12,18 @@ st.sidebar.header("📁 Quản lý Dữ liệu")
 uploaded_file = st.sidebar.file_uploader("Tải lên file DATA.xlsx mới nhất", type=["xlsx"])
 
 if uploaded_file is not None:
-    excel_source = io.BytesIO(uploaded_file.read())
+    file_bytes = uploaded_file.read()
+    excel_source = io.BytesIO(file_bytes)
     st.sidebar.success("✅ Đã sử dụng file Excel bạn vừa tải lên!")
 else:
     if os.path.exists("DATA.xlsx"):
         excel_source = "DATA.xlsx"
+        with open("DATA.xlsx", "rb") as f:
+            file_bytes = f.read()
         st.sidebar.info("ℹ️ Đang dùng file `DATA.xlsx` sẵn có trên hệ thống.")
     else:
         excel_source = None
+        file_bytes = None
 
 # --- ĐỌC DỮ LIỆU EXCEL ---
 @st.cache_data(ttl=3600)
@@ -62,14 +67,11 @@ else:
     with st.expander("➕ Thêm / Cập nhật giá nhiên liệu mới vào hệ thống", expanded=False):
         st.markdown("Bạn có thể chọn mặt hàng từ danh sách có sẵn hoặc tự nhập tên mặt hàng mới, sau đó điền giá và ngày áp dụng.")
         
-        # Lấy danh sách mặt hàng độc lập sẵn có trong file DATA
         danh_sach_mat_hang = df_gia["Mặt hàng"].dropna().unique().tolist()
         
-        # Dùng session state để lưu danh sách dòng tạm thời khi người dùng thêm trên giao diện
         if "new_price_rows" not in st.session_state:
             st.session_state.new_price_rows = pd.DataFrame(columns=["Mặt hàng", "Giá nhiên liệu", "Ngày"])
 
-        # Form nhập liệu từng dòng
         col_f1, col_f2, col_f3, col_f4 = st.columns([2, 2, 2, 1])
         with col_f1:
             input_mode = st.radio("Cách chọn Mặt hàng:", ["Chọn từ danh sách", "Nhập tay"], horizontal=True)
@@ -85,7 +87,6 @@ else:
             st.write("")
             st.write("")
             if st.button("Thêm vào danh sách"):
-                # Kiểm tra lỗi nhập liệu
                 try:
                     val_gia = float(nhap_gia.replace(".", "").replace(",", ""))
                 except ValueError:
@@ -100,12 +101,15 @@ else:
                 elif not parsed_d:
                     st.error("❌ Ngày không đúng định dạng dd/mm/yyyy!")
                 else:
-                    # Thêm vào bảng tạm
-                    new_row = pd.DataFrame({"Mặt hàng": [chon_mh.strip()], "Giá nhiên liệu": [val_gia], "Ngày": [parsed_d]})
+                    # Sắp xếp đúng thứ tự cột: Mặt hàng, Giá nhiên liệu, Ngày
+                    new_row = pd.DataFrame({
+                        "Mặt hàng": [chon_mh.strip()], 
+                        "Giá nhiên liệu": [val_gia], 
+                        "Ngày": [parsed_d.strftime("%d/%m/%Y")]
+                    })
                     st.session_state.new_price_rows = pd.concat([st.session_state.new_price_rows, new_row], ignore_index=True)
                     st.success("✅ Đã thêm dòng thành công!")
 
-        # Hiển thị bảng các dòng mới chuẩn bị ghi vào file
         if not st.session_state.new_price_rows.empty:
             st.subheader("Danh sách giá mới chờ lưu vào file:")
             st.dataframe(st.session_state.new_price_rows, use_container_width=True)
@@ -116,11 +120,9 @@ else:
                     st.session_state.new_price_rows = pd.DataFrame(columns=["Mặt hàng", "Giá nhiên liệu", "Ngày"])
                     st.rerun()
             with col_b2:
-                # Nút xuất file Excel đã gộp dữ liệu cũ và dữ liệu mới nhập
                 if st.button("📥 Tạo và Tải xuống file DATA.xlsx đã cập nhật"):
                     try:
-                        # Đọc lại file gốc từ nguồn hiện tại để ghi nối
-                        if uploaded_file is not None:
+                        if file_bytes is not None:
                             wb_export = openpyxl.load_workbook(io.BytesIO(file_bytes))
                         else:
                             wb_export = openpyxl.load_workbook("DATA.xlsx")
@@ -132,7 +134,10 @@ else:
                             ws_exp.cell(row=next_r, column=1, value=r_new["Mặt hàng"])
                             c_p = ws_exp.cell(row=next_r, column=2, value=float(r_new["Giá nhiên liệu"]))
                             c_p.number_format = '#,##0'
-                            c_d = ws_exp.cell(row=next_r, column=3, value=r_new["Ngày"])
+                            
+                            # Chuyển đổi lại định dạng ngày thành kiểu date để Excel hiển thị chuẩn
+                            date_obj = datetime.strptime(str(r_new["Ngày"]), "%d/%m/%Y")
+                            c_d = ws_exp.cell(row=next_r, column=3, value=date_obj)
                             c_d.number_format = 'DD/MM/YYYY'
                         
                         output_io = io.BytesIO()
