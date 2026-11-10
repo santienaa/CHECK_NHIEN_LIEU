@@ -10,7 +10,6 @@ st.set_page_config(page_title="Hệ Thống Phân Bổ Nhiên Liệu", layout="w
 st.sidebar.header("📁 Quản lý Dữ liệu")
 uploaded_file = st.sidebar.file_uploader("Tải lên file DATA.xlsx mới nhất", type=["xlsx"])
 
-# Xác định nguồn file Excel
 if uploaded_file is not None:
     excel_source = io.BytesIO(uploaded_file.read())
     st.sidebar.success("✅ Đã sử dụng file Excel bạn vừa tải lên!")
@@ -30,7 +29,6 @@ def load_data(file_src):
         df_xe = pd.read_excel(file_src, sheet_name="THONG_TIN_XE")
         df_gia = pd.read_excel(file_src, sheet_name="CHI_TIET_GIA_NHIEN_LIEU")
         
-        # Chuẩn hóa tên cột giá nhiên liệu linh hoạt
         df_gia.columns = [str(c).strip() for c in df_gia.columns]
         for col in df_gia.columns:
             if "giá" in col.lower():
@@ -57,9 +55,103 @@ def parse_date_input(date_str):
 # --- GIAO DIỆN CHÍNH ---
 st.title("⛽ Hệ Thống Phân Bổ Nhiên Liệu")
 
-if df_xe.empty:
+if df_xe.empty or df_gia.empty:
     st.warning("⚠️ Vui lòng tải lên file `DATA.xlsx` hợp lệ ở thanh bên trái (Sidebar) để bắt đầu sử dụng.")
 else:
+    # --- PHẦN 1: CẬP NHẬT / THÊM MỚI BẢNG GIÁ TRỰC TIẾP TRÊN WEB ---
+    with st.expander("➕ Thêm / Cập nhật giá nhiên liệu mới vào hệ thống", expanded=False):
+        st.markdown("Bạn có thể chọn mặt hàng từ danh sách có sẵn hoặc tự nhập tên mặt hàng mới, sau đó điền giá và ngày áp dụng.")
+        
+        # Lấy danh sách mặt hàng độc lập sẵn có trong file DATA
+        danh_sach_mat_hang = df_gia["Mặt hàng"].dropna().unique().tolist()
+        
+        # Dùng session state để lưu danh sách dòng tạm thời khi người dùng thêm trên giao diện
+        if "new_price_rows" not in st.session_state:
+            st.session_state.new_price_rows = pd.DataFrame(columns=["Mặt hàng", "Giá nhiên liệu", "Ngày"])
+
+        # Form nhập liệu từng dòng
+        col_f1, col_f2, col_f3, col_f4 = st.columns([2, 2, 2, 1])
+        with col_f1:
+            input_mode = st.radio("Cách chọn Mặt hàng:", ["Chọn từ danh sách", "Nhập tay"], horizontal=True)
+            if input_mode == "Chọn từ danh sách":
+                chon_mh = st.selectbox("Mặt hàng", danh_sach_mat_hang)
+            else:
+                chon_mh = st.text_input("Nhập tên mặt hàng mới")
+        with col_f2:
+            nhap_gia = st.text_input("Giá nhiên liệu (VNĐ)", value="0")
+        with col_f3:
+            nhap_ngay = st.text_input("Ngày áp dụng (dd/mm/yyyy)", value=datetime.now().strftime("%d/%m/%Y"))
+        with col_f4:
+            st.write("")
+            st.write("")
+            if st.button("Thêm vào danh sách"):
+                # Kiểm tra lỗi nhập liệu
+                try:
+                    val_gia = float(nhap_gia.replace(".", "").replace(",", ""))
+                except ValueError:
+                    val_gia = -1
+                
+                parsed_d = parse_date_input(nhap_ngay)
+                
+                if not chon_mh.strip():
+                    st.error("❌ Tên mặt hàng không được để trống!")
+                elif val_gia < 0:
+                    st.error("❌ Giá nhiên liệu phải là số hợp lệ!")
+                elif not parsed_d:
+                    st.error("❌ Ngày không đúng định dạng dd/mm/yyyy!")
+                else:
+                    # Thêm vào bảng tạm
+                    new_row = pd.DataFrame({"Mặt hàng": [chon_mh.strip()], "Giá nhiên liệu": [val_gia], "Ngày": [parsed_d]})
+                    st.session_state.new_price_rows = pd.concat([st.session_state.new_price_rows, new_row], ignore_index=True)
+                    st.success("✅ Đã thêm dòng thành công!")
+
+        # Hiển thị bảng các dòng mới chuẩn bị ghi vào file
+        if not st.session_state.new_price_rows.empty:
+            st.subheader("Danh sách giá mới chờ lưu vào file:")
+            st.dataframe(st.session_state.new_price_rows, use_container_width=True)
+            
+            col_b1, col_b2 = st.columns(2)
+            with col_b1:
+                if st.button("🗑️ Xóa danh sách tạm"):
+                    st.session_state.new_price_rows = pd.DataFrame(columns=["Mặt hàng", "Giá nhiên liệu", "Ngày"])
+                    st.rerun()
+            with col_b2:
+                # Nút xuất file Excel đã gộp dữ liệu cũ và dữ liệu mới nhập
+                if st.button("📥 Tạo và Tải xuống file DATA.xlsx đã cập nhật"):
+                    try:
+                        # Đọc lại file gốc từ nguồn hiện tại để ghi nối
+                        if uploaded_file is not None:
+                            wb_export = openpyxl.load_workbook(io.BytesIO(file_bytes))
+                        else:
+                            wb_export = openpyxl.load_workbook("DATA.xlsx")
+                        
+                        ws_exp = wb_export["CHI_TIET_GIA_NHIEN_LIEU"]
+                        
+                        for _, r_new in st.session_state.new_price_rows.iterrows():
+                            next_r = ws_exp.max_row + 1
+                            ws_exp.cell(row=next_r, column=1, value=r_new["Mặt hàng"])
+                            c_p = ws_exp.cell(row=next_r, column=2, value=float(r_new["Giá nhiên liệu"]))
+                            c_p.number_format = '#,##0'
+                            c_d = ws_exp.cell(row=next_r, column=3, value=r_new["Ngày"])
+                            c_d.number_format = 'DD/MM/YYYY'
+                        
+                        output_io = io.BytesIO()
+                        wb_export.save(output_io)
+                        processed_data = output_io.getvalue()
+                        
+                        st.download_button(
+                            label="👉 Bấm vào đây để tải file Excel về máy",
+                            data=processed_data,
+                            file_name="DATA.xlsx",
+                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                        )
+                        st.success("🎉 File Excel cập nhật đã sẵn sàng để tải xuống!")
+                    except Exception as ex:
+                        st.error(f"Lỗi khi xuất file: {ex}")
+
+    st.markdown("---")
+
+    # --- PHẦN 2: GIAO DIỆN TRA CỨU VÀ TÍNH TOÁN PHÂN BỔ ---
     col1, col2, col3 = st.columns(3)
     
     default_from = (datetime.now() - timedelta(days=30)).strftime("%d/%m/%Y")
