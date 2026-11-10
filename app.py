@@ -182,7 +182,7 @@ def update_petrolimex_prices():
     except Exception as e:
         print(f"Lỗi cào dữ liệu Petrolimex: {e}")
 
-# --- ĐỌC DỮ LIỆU EXCEL ---
+# --- ĐỌC DỮ LIỆU EXCEL TỰ ĐỘNG CHUẨN HÓA CỘT ---
 @st.cache_data(ttl=3600)
 def load_data():
     if not os.path.exists(FILE_EXCEL):
@@ -190,13 +190,21 @@ def load_data():
     try:
         df_xe = pd.read_excel(FILE_EXCEL, sheet_name="THONG_TIN_XE")
         df_gia = pd.read_excel(FILE_EXCEL, sheet_name="CHI_TIET_GIA_NHIEN_LIEU")
+        
+        # Chuẩn hóa tên cột để tránh mọi lỗi KeyError
+        df_gia.columns = [str(c).strip() for c in df_gia.columns]
+        for col in df_gia.columns:
+            if "giá" in col.lower():
+                df_gia.rename(columns={col: "Giá nhiên liệu"}, inplace=True)
+                break
+
         df_gia["Ngày"] = pd.to_datetime(df_gia["Ngày"], dayfirst=True)
         return df_xe, df_gia
     except Exception as e:
         st.error(f"Lỗi đọc file Excel: {e}")
         return pd.DataFrame(), pd.DataFrame()
 
-# Tự động chạy cập nhật giá khi app khởi chạy
+# Chạy cập nhật giá khi app khởi chạy
 with st.spinner("Đang đồng bộ và cập nhật giá nhiên liệu từ Petrolimex..."):
     update_petrolimex_prices()
 
