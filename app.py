@@ -1,7 +1,7 @@
 import streamlit as st
 import pandas as pd
 import os
-import openpyxl  # <-- Đã bổ sung khai báo thư viện openpyxl
+import openpyxl
 from datetime import datetime, timedelta
 import io
 
@@ -101,7 +101,6 @@ else:
                 elif not parsed_d:
                     st.error("❌ Ngày không đúng định dạng dd/mm/yyyy!")
                 else:
-                    # Sắp xếp đúng thứ tự cột: Mặt hàng, Giá nhiên liệu, Ngày
                     new_row = pd.DataFrame({
                         "Mặt hàng": [chon_mh.strip()], 
                         "Giá nhiên liệu": [val_gia], 
@@ -120,7 +119,7 @@ else:
                     st.session_state.new_price_rows = pd.DataFrame(columns=["Mặt hàng", "Giá nhiên liệu", "Ngày"])
                     st.rerun()
             with col_b2:
-                if st.button("📥 Tạo và Tải xuống file DATA.xlsx đã cập nhật"):
+                if st.button("📥 Tạo file DATA.xlsx để tải về"):
                     try:
                         if file_bytes is not None:
                             wb_export = openpyxl.load_workbook(io.BytesIO(file_bytes))
@@ -129,28 +128,38 @@ else:
                         
                         ws_exp = wb_export["CHI_TIET_GIA_NHIEN_LIEU"]
                         
+                        # TÌM DÒNG CÓ DỮ LIỆU THỰC TẾ CUỐI CÙNG (BỎ QUA DÒNG TRỐNG THỪA)
+                        last_valid_row = 1
+                        for r in range(ws_exp.max_row, 0, -1):
+                            row_has_data = any(ws_exp.cell(row=r, column=c).value is not None for c in range(1, ws_exp.max_column + 1))
+                            if row_has_data:
+                                last_valid_row = r
+                                break
+
+                        # Ghi tiếp vào ngay sau dòng có dữ liệu thực tế cuối cùng
+                        current_write_row = last_valid_row
                         for _, r_new in st.session_state.new_price_rows.iterrows():
-                            next_r = ws_exp.max_row + 1
-                            ws_exp.cell(row=next_r, column=1, value=r_new["Mặt hàng"])
-                            c_p = ws_exp.cell(row=next_r, column=2, value=float(r_new["Giá nhiên liệu"]))
+                            current_write_row += 1
+                            ws_exp.cell(row=current_write_row, column=1, value=r_new["Mặt hàng"])
+                            c_p = ws_exp.cell(row=current_write_row, column=2, value=float(r_new["Giá nhiên liệu"]))
                             c_p.number_format = '#,##0'
                             
-                            # Chuyển đổi lại định dạng ngày thành kiểu date để Excel hiển thị chuẩn
                             date_obj = datetime.strptime(str(r_new["Ngày"]), "%d/%m/%Y")
-                            c_d = ws_exp.cell(row=next_r, column=3, value=date_obj)
+                            c_d = ws_exp.cell(row=current_write_row, column=3, value=date_obj)
                             c_d.number_format = 'DD/MM/YYYY'
                         
                         output_io = io.BytesIO()
                         wb_export.save(output_io)
                         processed_data = output_io.getvalue()
                         
+                        st.success("🎉 Đã tạo file thành công! Vui lòng bấm nút bên dưới để chọn nơi lưu file về máy:")
                         st.download_button(
-                            label="👉 Bấm vào đây để tải file Excel về máy",
+                            label="💾 TẢI XUỐNG FILE DATA.xlsx NGAY",
                             data=processed_data,
                             file_name="DATA.xlsx",
-                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                            type="primary"
                         )
-                        st.success("🎉 File Excel cập nhật đã sẵn sàng để tải xuống!")
                     except Exception as ex:
                         st.error(f"Lỗi khi xuất file: {ex}")
 
