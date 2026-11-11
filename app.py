@@ -58,7 +58,7 @@ def parse_date_input(date_str):
     return None
 
 # --- GIAO DIỆN CHÍNH ---
-st.title("⛽ Hệ Thống Phân Bổ Nhiên Liệu")
+st.title("⛽ Kiểm tra giá Nhiên Liệu")
 
 if df_xe.empty or df_gia.empty:
     st.warning("⚠️ Vui lòng tải lên file `DATA.xlsx` hợp lệ ở thanh bên trái (Sidebar) để bắt đầu sử dụng.")
