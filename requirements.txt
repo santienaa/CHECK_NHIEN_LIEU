@@ -1,7 +1,3 @@
 streamlit
 pandas
 openpyxl
-requests
-beautifulsoup4
-easyocr
-torch
