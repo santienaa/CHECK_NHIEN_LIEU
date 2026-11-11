@@ -5,7 +5,7 @@ import openpyxl
 from datetime import datetime, timedelta
 import io
 
-st.set_page_config(page_title="Hệ Thống Phân Bổ Nhiên Liệu", layout="wide")
+st.set_page_config(page_title="Kiểm tra giá nhiên liệu xe", layout="wide")
 
 # --- GIAO DIỆN THANH BÊN (SIDEBAR) ĐỂ UPLOAD FILE ---
 st.sidebar.header("📁 Quản lý Dữ liệu")
